@@ -1,0 +1,587 @@
+{
+"AWSTemplateFormatVersion" : "2010-09-09",
+"Description" : "Core Instances Infrastructure - Creates a Bastion server in one of the Public subnets and an Vault EC2 instance in each of the Private subnets.",
+
+	"Parameters" :
+	{
+
+      "VaultChildStackName":
+      {
+        "Description": "Name of the stack containing the vault security",
+        "Type": "String"
+      },
+      
+      "NumberOfSubnetNodes" :
+      {
+        "Description" : "Vault Core Infrastructure - Default, Min and Max Values for Number of Subnets (and therefore Instances) created to serve the Vault Core Software",
+        "Type" : "Number",
+        "Default" : 2,
+        "MinValue" : 2,
+        "MaxValue" : 5
+      }
+  
+  },
+
+	"Mappings" :
+	{
+	  
+	    "RegionAZMap" :
+      {
+          "us-east-1" : { "1" : "us-east-1a", "2" : "us-east-1b", "3" : "us-east-1c", "4" : "us-east-1d", "5" : "us-east-1e" },
+          "us-east-2" : { "1" : "us-east-2a", "2" : "us-east-2b", "3" : "us-east-2c" },
+          "us-west-1" : { "1" : "us-west-1b", "2" : "us-west-1c" },
+          "us-west-2" : { "1" : "us-west-2a", "2" : "us-west-2b", "3" : "us-west-2c" },
+          "ca-central-1" : { "1" : "ca-central-1a", "2" : "ca-central-1b" },
+          "eu-west-1" : { "1" : "eu-west-1a", "2" : "eu-west-1b", "3" : "eu-west-1c"  },
+          "eu-central-1" : { "1" : "eu-central-1a", "2" : "eu-central-1b" },
+          "eu-west-2" : { "1" : "eu-west-2a", "2" : "eu-west-2b" },
+          "ap-southeast-1" : { "1" : "ap-southeast-1a", "2" : "ap-southeast-1b"  },
+          "ap-southeast-2" : { "1" : "ap-southeast-2a", "2" : "ap-southeast-2b", "3" : "ap-southeast-2c" },
+          "ap-northeast-2" : { "1" : "ap-northeast-2a", "2" : "ap-northeast-2c" },
+          "ap-northeast-1" : { "1" : "ap-northeast-1a", "2" : "ap-northeast-1c" },
+          "ap-south-1" : { "1" : "ap-south-1a", "2" : "ap-south-1b" },
+          "sa-east-1" : { "1" : "sa-east-1a", "2" : "sa-east-1b", "3" : "sa-east-1c" }
+      }
+
+  },
+
+  "Conditions" :
+	{
+	      "CreateNode5" :
+	      { "Fn::Equals" :
+            [ { "Ref" : "NumberOfSubnetNodes" }, 5 ]
+	      },
+        "CreateNode4" :
+        { "Fn::Or" :
+            [ { "Fn::Equals" : [ { "Ref" : "NumberOfSubnetNodes" }, 4 ] }, { "Condition" : "CreateNode5" }]
+        },
+        "CreateNode3" :
+        { "Fn::Or" :
+            [ { "Fn::Equals" : [ { "Ref" : "NumberOfSubnetNodes" }, 3 ] }, { "Condition" : "CreateNode4" }]
+        },
+        "CreateNode2" :
+        { "Fn::Or" :
+            [ { "Fn::Equals" : [ { "Ref" : "NumberOfSubnetNodes" }, 2 ] }, { "Condition" : "CreateNode3" }]
+        }
+	},
+
+	"Resources" :
+  {
+    
+	    "NetworkInfo":
+	    {
+	      "Type": "Custom::NetworkInfo",
+	      "Properties":
+	      {
+	        "ServiceToken": {"Fn::GetAtt": ["LookupStackOutputs","Arn"]},
+	        "StackName": {"Ref": "VaultChildStackName"}
+	      }
+	    },
+	    
+	    "LookupStackOutputs":
+		  {
+		        "Type": "AWS::Lambda::Function",
+		        "Properties": {
+		            "Handler": "index.handler",
+		            "Role": {
+		            "Fn::GetAtt": [
+		                "LambdaExecutionRole",
+		                "Arn"
+		            ]
+		            },
+		            "Code": {
+		            "ZipFile": {
+		                "Fn::Join": [
+		                "\n",
+		                [
+		                    "var response = require('cfn-response');",
+		                    "exports.handler = function(event, context) {",
+		                    "    console.log('REQUEST RECEIVED:\\n', JSON.stringify(event));",
+		                    "    if (event.RequestType == 'Delete') {",
+		                    "        response.send(event, context, response.SUCCESS);",
+		                    "        return;",
+		                    "    }",
+		                    "    var stackName = event.ResourceProperties.StackName;",
+		                    "    var responseData = {};",
+		                    "    if (stackName) {",
+		                    "        var aws = require('aws-sdk');",
+		                    "        var cfn = new aws.CloudFormation();",
+		                    "        cfn.describeStacks({StackName: stackName}, function(err, data) {",
+		                    "            if (err) {",
+		                    "                responseData = {Error: 'DescribeStacks call failed'};",
+		                    "                console.log(responseData.Error + ':\\n', err);",
+		                    "                response.send(event, context, response.FAILED, responseData);",
+		                    "            }",
+		                    "            else {",
+		                    "                data.Stacks[0].Outputs.forEach(function(output) {",
+		                    "                    responseData[output.OutputKey] = output.OutputValue.toLowerCase();",
+		                    "                });",
+		                    "                response.send(event, context, response.SUCCESS, responseData);",
+		                    "            }",
+		                    "        });",
+		                    "    } else {",
+		                    "        responseData = {Error: 'Stack name not specified'};",
+		                    "        console.log(responseData.Error);",
+		                    "        response.send(event, context, response.FAILED, responseData);",
+		                    "    }",
+		                    "};"
+		                ]
+		                ]
+		            }
+		            },
+		            "Runtime": "nodejs4.3",
+		            "Timeout": "30"
+		        }
+		        },
+        
+        
+		        "LambdaExecutionRole": {
+		        "Type": "AWS::IAM::Role",
+		        "Properties": {
+		            "AssumeRolePolicyDocument": {
+		            "Version": "2012-10-17",
+		            "Statement": [
+		                {
+		                "Effect": "Allow",
+		                "Principal": {
+		                    "Service": [
+		                    "lambda.amazonaws.com"
+		                    ]
+		                },
+		                "Action": [
+		                    "sts:AssumeRole"
+		                ]
+		                }
+		            ]
+		            },
+		            "Path": "/",
+		            "Policies": [
+		            {
+		                "PolicyName": "root",
+		                "PolicyDocument": {
+		                "Version": "2012-10-17",
+		                "Statement": [
+		                    {
+		                    "Effect": "Allow",
+		                    "Action": [
+		                        "logs:CreateLogGroup",
+		                        "logs:CreateLogStream",
+		                        "logs:PutLogEvents"
+		                    ],
+		                    "Resource": "arn:aws:logs:*:*:*"
+		                    },
+		                    {
+		                    "Effect": "Allow",
+		                    "Action": [
+		                        "cloudformation:DescribeStacks",
+		                        "ec2:DescribeImages"
+		                    ],
+		                    "Resource": "*"
+		                    }
+		                ]
+		                }
+		            }
+		            ]
+		        }
+		  },
+      
+    "VaultEC2InstanceRole" :
+    {
+      "Type" : "AWS::IAM::Role",
+      "Properties" :
+      {
+        "AssumeRolePolicyDocument" :
+        {
+          "Statement" :
+          [{
+            "Action" : ["sts:AssumeRole"],
+            "Effect" : "Allow",
+            "Principal" :
+            {
+             "Service" : [ "ec2.amazonaws.com"]
+            }
+          }]
+        }
+      }
+    },
+    
+   "VaultEC2InstanceProfile" :
+    {
+      "Type" : "AWS::IAM::InstanceProfile",
+      "Properties" :
+      {
+        "Path" : "/",
+        "Roles" : [{ "Ref" : "VaultEC2InstanceRole" }]
+      }
+    },
+    
+    "VaultEC2InstancePolicy" :
+    {
+      "Type" : "AWS::IAM::Policy",
+      "Properties" :
+      {
+        "PolicyDocument" :
+        {
+          "Statement" :
+          [
+          {
+           "Effect" : "Allow",
+           "Action" : [
+             "ec2:RunInstances",
+             "dynamodb:DescribeTable",
+             "dynamodb:CreateTable"
+           ],
+           "Resource" : "*"
+          }
+          ]
+        },
+        "PolicyName" : "Vault-Reference-Instance-Policy",
+        "Roles" : [ { "Ref" : "VaultEC2InstanceRole"}]
+        }
+      
+    },
+    
+    "VaultEC2Access" :
+    {
+        "Type" : "AWS::EC2::Instance",
+        "Properties" :
+        {
+          "EbsOptimized" : "false",
+          "ImageId" : { "Fn::GetAtt" : ["NetworkInfo","VaultImageID"] },
+          "InstanceType" : { "Fn::GetAtt" : ["NetworkInfo","VaultInstanceType"] },
+          "KeyName" : { "Fn::GetAtt" : ["NetworkInfo","VaultEC2KeyPair"] },
+          "NetworkInterfaces": [
+          {
+                "AssociatePublicIpAddress": true,
+                "DeleteOnTermination": true,
+                "DeviceIndex": "0",
+                "SubnetId" : { "Fn::GetAtt" : ["NetworkInfo","VaultPublicSubnet1"] },
+                "GroupSet" : [{ "Fn::GetAtt" : ["NetworkInfo","VaultPublicSG"] }]
+            }
+          ],
+          "IamInstanceProfile" : { "Ref" : "VaultEC2InstanceProfile"},
+          "Tags" : [ { "Key" : "Name", "Value" : "vault_public_access_instance" } ]
+        }
+    },
+
+    "VaultEC2Instance1" :
+    {
+        "Type" : "AWS::EC2::Instance",
+        "Properties" :
+        {
+          "EbsOptimized" : "false",
+          "ImageId" : { "Fn::GetAtt" : ["NetworkInfo","VaultImageID"] },
+          "InstanceType" : { "Fn::GetAtt" : ["NetworkInfo","VaultInstanceType"] },
+          "KeyName" : { "Fn::GetAtt" : ["NetworkInfo","VaultEC2KeyPair"] },
+          "SecurityGroupIds" : [{ "Fn::GetAtt" : ["NetworkInfo","VaultPrivateSG"] }],
+          "SubnetId" : { "Fn::GetAtt" : ["NetworkInfo","VaultPrivateSubnet1"] },
+          "IamInstanceProfile" : { "Ref" : "VaultEC2InstanceProfile"},
+          "Tags" : [ { "Key" : "Name", "Value" : "vault_private_instance" } ],
+          "UserData" :
+             {
+               "Fn::Base64" : { "Fn::Join" : [ "",
+                ["#!/bin/bash -v\n",
+                "sudo yum -y update\n"
+                
+              ]
+              ] }
+            }
+         }
+	 
+    },
+ 
+    "VaultEC2Instance2" :
+    {
+        "Type" : "AWS::EC2::Instance",
+        "Properties" :
+        {
+          "EbsOptimized" : "false",
+          "ImageId" : { "Fn::GetAtt" : ["NetworkInfo","VaultImageID"] },
+          "InstanceType" : { "Fn::GetAtt" : ["NetworkInfo","VaultInstanceType"] },
+          "KeyName" : { "Fn::GetAtt" : ["NetworkInfo","VaultEC2KeyPair"] },
+          "SecurityGroupIds" : [{ "Fn::GetAtt" : ["NetworkInfo","VaultPrivateSG"] }],
+          "SubnetId" : { "Fn::GetAtt" : ["NetworkInfo","VaultPrivateSubnet2"] },
+          "IamInstanceProfile" : { "Ref" : "VaultEC2InstanceProfile"},
+          "Tags" : [ { "Key" : "Name", "Value" : "vault_private_instance" } ],
+          "UserData" :
+             {
+               "Fn::Base64" : { "Fn::Join" : [ "",
+                ["#!/bin/bash -v\n",
+                "sudo yum -y update\n"
+                
+              ]
+              ] }
+            }
+         }
+    },
+    
+    "VaultEC2Instance3" :
+    {
+        "Type" : "AWS::EC2::Instance",
+        "Condition" : "CreateNode3",
+        "Properties" :
+        {
+          "EbsOptimized" : "false",
+          "ImageId" : { "Fn::GetAtt" : ["NetworkInfo","VaultImageID"] },
+          "InstanceType" : { "Fn::GetAtt" : ["NetworkInfo","VaultInstanceType"] },
+          "KeyName" : { "Fn::GetAtt" : ["NetworkInfo","VaultEC2KeyPair"] },
+          "SecurityGroupIds" : [{ "Fn::GetAtt" : ["NetworkInfo","VaultPrivateSG"] }],
+          "SubnetId" : { "Fn::GetAtt" : ["NetworkInfo","VaultPrivateSubnet3"] },
+          "IamInstanceProfile" : { "Ref" : "VaultEC2InstanceProfile"},
+          "Tags" : [ { "Key" : "Name", "Value" : "vault_private_instance" } ],
+          "UserData" :
+             {
+               "Fn::Base64" : { "Fn::Join" : [ "",
+                ["#!/bin/bash -v\n",
+                "sudo yum -y update\n"
+                
+              ]
+              ] }
+            }
+         }
+    },
+    
+    "VaultEC2Instance4" :
+    {
+        "Type" : "AWS::EC2::Instance",
+        "Condition" : "CreateNode4",
+        "Properties" :
+        {
+          "EbsOptimized" : "false",
+          "ImageId" : { "Fn::GetAtt" : ["NetworkInfo","VaultImageID"] },
+          "InstanceType" : { "Fn::GetAtt" : ["NetworkInfo","VaultInstanceType"] },
+          "KeyName" : { "Fn::GetAtt" : ["NetworkInfo","VaultEC2KeyPair"] },
+          "SecurityGroupIds" : [{ "Fn::GetAtt" : ["NetworkInfo","VaultPrivateSG"] }],
+          "SubnetId" : { "Fn::GetAtt" : ["NetworkInfo","VaultPrivateSubnet4"] },
+          "IamInstanceProfile" : { "Ref" : "VaultEC2InstanceProfile"},
+          "Tags" : [ { "Key" : "Name", "Value" : "vault_private_instance" } ],
+          "UserData" :
+             {
+               "Fn::Base64" : { "Fn::Join" : [ "",
+                ["#!/bin/bash -v\n",
+                "sudo yum -y update\n"
+                
+              ]
+              ] }
+            }
+         }
+    },
+    
+    "VaultEC2Instance5" :
+    {
+        "Type" : "AWS::EC2::Instance",
+        "Condition" : "CreateNode5",
+        "Properties" :
+        {
+          "EbsOptimized" : "false",
+          "ImageId" : { "Fn::GetAtt" : ["NetworkInfo","VaultImageID"] },
+          "InstanceType" : { "Fn::GetAtt" : ["NetworkInfo","VaultInstanceType"] },
+          "KeyName" : { "Fn::GetAtt" : ["NetworkInfo","VaultEC2KeyPair"] },
+          "SecurityGroupIds" : [{ "Fn::GetAtt" : ["NetworkInfo","VaultPrivateSG"] }],
+          "SubnetId" : { "Fn::GetAtt" : ["NetworkInfo","VaultPrivateSubnet5"] },
+          "IamInstanceProfile" : { "Ref" : "VaultEC2InstanceProfile"},
+          "Tags" : [ { "Key" : "Name", "Value" : "vault_private_instance" } ],
+          "UserData" :
+             {
+               "Fn::Base64" : { "Fn::Join" : [ "",
+                ["#!/bin/bash -v\n",
+                "sudo yum -y update\n"
+                
+              ]
+              ] }
+            }
+         }
+    },
+    
+    "VaultInternalELB2Nodes" :
+    {
+        "Type": "AWS::ElasticLoadBalancing::LoadBalancer",
+        "Condition" : "CreateNode2",
+        "Properties" :
+        {
+  
+          "CrossZone" : "true",
+          "Instances" : [ { "Ref" : "VaultEC2Instance1" },{ "Ref" : "VaultEC2Instance2" } ],
+          "Listeners" : [ { "LoadBalancerPort" : "8200", "InstancePort" : "8200" ,"Protocol" : "TCP"} ],
+          "Subnets" : [
+                        { "Fn::GetAtt" : ["NetworkInfo","VaultPrivateSubnet1"] },
+                        { "Fn::GetAtt" : ["NetworkInfo","VaultPrivateSubnet2"] }
+                      ]
+        }
+      
+    },
+    
+    "VaultInternalELB3Nodes" :
+    {
+        "Type": "AWS::ElasticLoadBalancing::LoadBalancer",
+        "Condition" : "CreateNode3",
+        "Properties" :
+        {
+  
+          "CrossZone" : "true",
+          "Instances" : [ { "Ref" : "VaultEC2Instance1" },{ "Ref" : "VaultEC2Instance2" },{ "Ref" : "VaultEC2Instance3" } ],
+          "Listeners" : [ { "LoadBalancerPort" : "8200", "InstancePort" : "8200" ,"Protocol" : "TCP"} ],
+          "Subnets" : [
+                        { "Fn::GetAtt" : ["NetworkInfo","VaultPrivateSubnet1"] },
+                        { "Fn::GetAtt" : ["NetworkInfo","VaultPrivateSubnet2"] },
+                        { "Fn::GetAtt" : ["NetworkInfo","VaultPrivateSubnet3"] }
+                      ]
+        }
+      
+    },
+    
+    "VaultInternalELB4Nodes" :
+    {
+        "Type": "AWS::ElasticLoadBalancing::LoadBalancer",
+        "Condition" : "CreateNode4",
+        "Properties" :
+        {
+  
+          "CrossZone" : "true",
+          "Instances" : [ { "Ref" : "VaultEC2Instance1" },{ "Ref" : "VaultEC2Instance2" },{ "Ref" : "VaultEC2Instance3" },{ "Ref" : "VaultEC2Instance4" } ],
+          "Listeners" : [ { "LoadBalancerPort" : "8200", "InstancePort" : "8200" ,"Protocol" : "TCP"} ],
+          "Subnets" : [
+                        { "Fn::GetAtt" : ["NetworkInfo","VaultPrivateSubnet1"] },
+                        { "Fn::GetAtt" : ["NetworkInfo","VaultPrivateSubnet2"] },
+                        { "Fn::GetAtt" : ["NetworkInfo","VaultPrivateSubnet3"] },
+                        { "Fn::GetAtt" : ["NetworkInfo","VaultPrivateSubnet4"] }
+                      ]
+        }
+      
+    },
+    
+    "VaultInternalELB5Nodes" :
+    {
+        "Type": "AWS::ElasticLoadBalancing::LoadBalancer",
+        "Condition" : "CreateNode5",
+        "Properties" :
+        {
+  
+          "CrossZone" : "true",
+          "Instances" : [ { "Ref" : "VaultEC2Instance1" },{ "Ref" : "VaultEC2Instance2" },{ "Ref" : "VaultEC2Instance3" },{ "Ref" : "VaultEC2Instance4" },{ "Ref" : "VaultEC2Instance5" } ],
+          "Listeners" : [ { "LoadBalancerPort" : "8200", "InstancePort" : "8200" ,"Protocol" : "TCP"} ],
+          "Subnets" : [
+                        { "Fn::GetAtt" : ["NetworkInfo","VaultPrivateSubnet1"] },
+                        { "Fn::GetAtt" : ["NetworkInfo","VaultPrivateSubnet2"] },
+                        { "Fn::GetAtt" : ["NetworkInfo","VaultPrivateSubnet3"] },
+                        { "Fn::GetAtt" : ["NetworkInfo","VaultPrivateSubnet4"] },
+                        { "Fn::GetAtt" : ["NetworkInfo","VaultPrivateSubnet5"] }
+                      ]
+        }
+      
+    }
+      
+  },
+
+	"Outputs" :
+	{
+
+	  "VaultRefVPC":
+		{
+		  "Description": "VAULT CORE REFERENCE: VPC ID",
+	   "Value": { "Fn::GetAtt" : ["NetworkInfo","VaultRefVPC"] }
+	  },
+	  "VaultPublicSubnet1" :
+	  {
+      "Description": "VAULT CORE REFERENCE: ID of Public Subnet 1",
+      "Value" : { "Fn::GetAtt" : ["NetworkInfo","VaultPublicSubnet1"] }
+    },
+	  
+		"VaultPublicSubnet2" :
+	  {
+      "Description": "VAULT CORE REFERENCE: ID of Public Subnet 2",
+      "Value" : { "Fn::GetAtt" : ["NetworkInfo","VaultPublicSubnet2"] }
+    },
+    
+		"VaultPublicSubnet3" :
+	  {
+      "Description": "VAULT CORE REFERENCE: ID of Public Subnet 3",
+      "Condition" : "CreateNode3",
+      "Value" : { "Fn::GetAtt" : ["NetworkInfo","VaultPublicSubnet3"] }
+    },
+    
+		"VaultPublicSubnet4" :
+	  {
+      "Description": "VAULT CORE REFERENCE: ID of Public Subnet 4",
+      "Condition" : "CreateNode4",
+      "Value" : { "Fn::GetAtt" : ["NetworkInfo","VaultPublicSubnet4"] }
+    },
+    
+		"VaultPublicSubnet5" :
+	  {
+      "Description": "VAULT CORE REFERENCE: ID of Public Subnet 5",
+      "Condition" : "CreateNode5",
+      "Value" : { "Fn::GetAtt" : ["NetworkInfo","VaultPublicSubnet5"] }
+    },
+    
+	  "VaultPrivateSubnet1" :
+	  {
+      "Description": "VAULT CORE REFERENCE: ID of Private Subnet 1",
+      "Value" : { "Fn::GetAtt" : ["NetworkInfo","VaultPrivateSubnet1"] }
+    },
+    
+    "VaultPrivateSubnet2" :
+	  {
+      "Description": "VAULT CORE REFERENCE: ID of Private Subnet 2",
+      "Value" : { "Fn::GetAtt" : ["NetworkInfo","VaultPrivateSubnet2"] }
+    },
+    
+    "VaultPrivateSubnet3" :
+	  {
+      "Description": "VAULT CORE REFERENCE: ID of Private Subnet 3",
+      "Condition" : "CreateNode3",
+      "Value" : { "Fn::GetAtt" : ["NetworkInfo","VaultPrivateSubnet3"] }
+    },
+    
+    "VaultPrivateSubnet4" :
+	  {
+      "Description": "VAULT CORE REFERENCE: ID of Private Subnet 4",
+      "Condition" : "CreateNode4",
+      "Value" : { "Fn::GetAtt" : ["NetworkInfo","VaultPrivateSubnet4"] }
+    },
+    
+    "VaultPrivateSubnet5" :
+	  {
+      "Description": "VAULT CORE REFERENCE: ID of Private Subnet 5",
+      "Condition" : "CreateNode5",
+      "Value" : { "Fn::GetAtt" : ["NetworkInfo","VaultPrivateSubnet5"] }
+    },
+    
+    "VaultCIDRBastionAccess" :
+	  {
+      "Description": "VAULT CORE REFERENCE: CIDR of IP used for access to Bastion host",
+      "Value" : { "Fn::GetAtt" : ["NetworkInfo","VaultCIDRBastionAccess"] }
+    },
+    
+    "VaultImageID" :
+    {
+      "Description": "VAULT CORE REFERENCE: Image ID of AMI used for Vault Core Infrastructure",
+      "Value" : { "Fn::GetAtt" : ["NetworkInfo","VaultImageID"] }
+    },
+    
+    "VaultInstanceType" :
+    {
+      "Description": "VAULT CORE REFERENCE: Instance Type used for Vault Core Infrastructure",
+      "Value" : { "Fn::GetAtt" : ["NetworkInfo","VaultInstanceType"] }
+    },
+    
+    "VaultEC2KeyPair" :
+    {
+      "Description": "VAULT CORE REFERENCE: Key Pair used for Vault EC2 Instances",
+      "Value" : { "Fn::GetAtt" : ["NetworkInfo","VaultEC2KeyPair"] }
+    },
+    
+    "VaultPublicSG" :
+	  {
+      "Description": "VAULT CORE REFERENCE: Public Instance Security Group",
+      "Value" : { "Fn::GetAtt" : ["NetworkInfo","VaultPublicSG"] }
+    },
+    
+    "VaultPrivateSG" :
+	  {
+      "Description": "VAULT CORE REFERENCE: Private Instance Security Group",
+      "Value" : { "Fn::GetAtt" : ["NetworkInfo","VaultPrivateSG"] }
+    }
+
+  }
+}
